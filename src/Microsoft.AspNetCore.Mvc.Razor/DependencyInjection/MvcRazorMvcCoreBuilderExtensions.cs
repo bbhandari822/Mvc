@@ -3,6 +3,7 @@
 
 using System;
 using System.Linq;
+using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Razor;
 using Microsoft.AspNetCore.Mvc.Razor.Compilation;
@@ -151,26 +152,32 @@ namespace Microsoft.Extensions.DependencyInjection
             //
             // Razor compilation infrastructure
             //
-            services.TryAddSingleton<RazorProject, FileProviderRazorProject>();
-            services.TryAddSingleton<RazorTemplateEngine, MvcRazorTemplateEngine>();
             services.TryAddSingleton<LazyMetadataReferenceFeature>();
-
+            services.TryAddSingleton<RazorProjectFileSystem, FileProviderRazorProjectFileSystem>();
             services.TryAddSingleton(s =>
             {
-                return RazorEngine.Create(b =>
+                var fileSystem = s.GetRequiredService<RazorProjectFileSystem>();
+                var projectEngine = RazorProjectEngine.Create(RazorConfiguration.Default, fileSystem, builder =>
                 {
-                    RazorExtensions.Register(b);
+                    RazorExtensions.Register(builder);
 
                     // Roslyn + TagHelpers infrastructure
                     var metadataReferenceFeature = s.GetRequiredService<LazyMetadataReferenceFeature>();
-                    b.Features.Add(metadataReferenceFeature);
-                    b.Features.Add(new Microsoft.CodeAnalysis.Razor.CompilationTagHelperFeature());
+                    builder.Features.Add(metadataReferenceFeature);
+                    builder.Features.Add(new CodeAnalysis.Razor.CompilationTagHelperFeature());
 
                     // TagHelperDescriptorProviders (actually do tag helper discovery)
-                    b.Features.Add(new Microsoft.CodeAnalysis.Razor.DefaultTagHelperDescriptorProvider());
-                    b.Features.Add(new ViewComponentTagHelperDescriptorProvider());
+                    builder.Features.Add(new CodeAnalysis.Razor.DefaultTagHelperDescriptorProvider());
+                    builder.Features.Add(new ViewComponentTagHelperDescriptorProvider());
                 });
+
+                return projectEngine;
             });
+
+            // Legacy Razor compilation services
+            services.TryAddSingleton<RazorProject, FileProviderRazorProjectFileSystem>();
+            services.TryAddSingleton<RazorTemplateEngine, MvcRazorTemplateEngine>();
+            services.TryAddSingleton(s => s.GetRequiredService<RazorProjectEngine>().Engine);
 
             // This caches Razor page activation details that are valid for the lifetime of the application.
             services.TryAddSingleton<IRazorPageActivator, RazorPageActivator>();

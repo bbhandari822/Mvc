@@ -43,7 +43,7 @@ namespace Microsoft.AspNetCore.Mvc.Razor
         private readonly HtmlEncoder _htmlEncoder;
         private readonly ILogger _logger;
         private readonly RazorViewEngineOptions _options;
-        private readonly RazorProject _razorProject;
+        private readonly RazorProject _razorFileSystem;
         private readonly DiagnosticSource _diagnosticSource;
 
         /// <summary>
@@ -78,9 +78,27 @@ namespace Microsoft.AspNetCore.Mvc.Razor
             _pageActivator = pageActivator;
             _htmlEncoder = htmlEncoder;
             _logger = loggerFactory.CreateLogger<RazorViewEngine>();
-            _razorProject = razorProject;
+            _razorFileSystem = razorProject;
             _diagnosticSource = diagnosticSource;
             ViewLookupCache = new MemoryCache(new MemoryCacheOptions());
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the RazorViewEngine
+        /// </summary>
+        public RazorViewEngine(
+            IRazorPageFactoryProvider pageFactory,
+            IRazorPageActivator pageActivator,
+            HtmlEncoder htmlEncoder,
+            IOptions<RazorViewEngineOptions> optionsAccessor,
+            RazorProjectFileSystem razorFileSystem,
+            ILoggerFactory loggerFactory,
+            DiagnosticSource diagnosticSource,
+
+            // This is only here to disambiguate the constructor for DI
+            IServiceProvider serviceProvider) 
+            : this (pageFactory, pageActivator, htmlEncoder, optionsAccessor, razorFileSystem, loggerFactory, diagnosticSource)
+        {
         }
 
         /// <summary>
@@ -441,7 +459,7 @@ namespace Microsoft.AspNetCore.Mvc.Razor
         {
             var viewStartPages = new List<ViewLocationCacheItem>();
 
-            foreach (var viewStartProjectItem in _razorProject.FindHierarchicalItems(path, ViewStartFileName))
+            foreach (var viewStartProjectItem in _razorFileSystem.FindHierarchicalItems(path, ViewStartFileName))
             {
                 var result = _pageFactory.CreateFactory(viewStartProjectItem.FilePath);
                 var viewDescriptor = result.ViewDescriptor;
