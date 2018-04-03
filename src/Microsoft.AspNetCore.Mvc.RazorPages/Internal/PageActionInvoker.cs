@@ -9,12 +9,14 @@ using System.Runtime.ExceptionServices;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.Mvc.Internal;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Mvc.ViewFeatures.Internal;
+using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
 
 namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
@@ -42,6 +44,7 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
             IPageHandlerMethodSelector handlerMethodSelector,
             DiagnosticSource diagnosticSource,
             ILogger logger,
+            IActionResultTypeMapper mapper,
             PageContext pageContext,
             IFilterMetadata[] filterMetadata,
             PageActionInvokerCacheEntry cacheEntry,
@@ -51,6 +54,7 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
             : base(
                   diagnosticSource,
                   logger,
+                  mapper,
                   pageContext,
                   filterMetadata,
                   pageContext.ValueProviderFactories)
@@ -194,11 +198,8 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
                 {
                     // Do nothing, already set the value.
                 }
-                else if (parameter.ParameterInfo.HasDefaultValue)
-                {
-                    value = parameter.ParameterInfo.DefaultValue;
-                }
-                else if (parameter.ParameterInfo.ParameterType.IsValueType)
+                else if (!ParameterDefaultValue.TryGetDefaultValue(parameter.ParameterInfo, out value) &&
+                    parameter.ParameterInfo.ParameterType.IsValueType)
                 {
                     value = Activator.CreateInstance(parameter.ParameterInfo.ParameterType);
                 }

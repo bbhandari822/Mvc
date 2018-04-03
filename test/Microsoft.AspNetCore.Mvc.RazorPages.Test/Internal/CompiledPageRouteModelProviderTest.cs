@@ -82,7 +82,10 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
             var descriptors = new[]
             {
                 CreateVersion_2_1_Descriptor("/Pages/About.cshtml"),
-                CreateVersion_2_1_Descriptor("/Pages/Home.cshtml", "some-prefix"),
+                CreateVersion_2_1_Descriptor("/Pages/Home.cshtml", metadata: new[]
+                {
+                    new RazorCompiledItemMetadataAttribute("RouteTemplate", "some-prefix"),
+                }),
             };
 
             var provider = CreateProvider(descriptors: descriptors);
@@ -515,6 +518,110 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
                 });
         }
 
+        [Fact]
+        public void OnProvidersExecuting_UsesTheFirstDescriptorForEachPath()
+        {
+            // ViewsFeature may contain duplicate entries for the same Page - for instance when an app overloads a library's views.
+            // It picks the first entry for each path. In the ordinary case, this should ensure that the app's Razor Pages are prefered
+            // to a Razor Page added by a library.
+
+            // Arrange
+            var descriptors = new[]
+            {
+                // Page coming from the app
+                CreateVersion_2_1_Descriptor("/Pages/About.cshtml", metadata: new object[]
+                {
+                    new RazorSourceChecksumAttribute("SHA1", GetChecksum("some content"), "/Pages/About.cshtml"),
+                }),
+                CreateVersion_2_1_Descriptor("/Pages/Home.cshtml", metadata: new object[]
+                {
+                    new RazorSourceChecksumAttribute("SHA1", GetChecksum("some content"), "/Pages/Index.cshtml"),
+                }),
+                // Page coming from the app
+                CreateVersion_2_1_Descriptor("/Pages/About.cshtml", metadata: new object[]
+                {
+                    new RazorSourceChecksumAttribute("SHA1", GetChecksum("some content"), "/Pages/About.cshtml"),
+                }),
+            };
+
+            var provider = CreateProvider(descriptors: descriptors);
+            var context = new PageRouteModelProviderContext();
+
+            // Act
+            provider.OnProvidersExecuting(context);
+
+            // Assert
+            Assert.Collection(
+                context.RouteModels,
+                result =>
+                {
+                    Assert.Equal("/Pages/About.cshtml", result.RelativePath);
+                    Assert.Equal("/About", result.ViewEnginePath);
+                },
+                result =>
+                {
+                    Assert.Equal("/Pages/Home.cshtml", result.RelativePath);
+                    Assert.Equal("/Home", result.ViewEnginePath);
+                });
+        }
+
+        [Fact]
+        public void GetRouteTemplate_ReturnsPathFromRazorPageAttribute()
+        {
+            // Arrange
+            var expected = "test";
+            var descriptor = CreateVersion_2_0_Descriptor("/Pages/Home.cshtml", expected);
+
+            // Act
+            var result = CompiledPageRouteModelProvider.GetRouteTemplate(descriptor);
+
+            // Assert
+            Assert.Equal(expected, result);
+        }
+
+        [Fact]
+        public void GetRouteTemplate_ReturnsNull_IfPageAttributeDoesNotHaveTemplate()
+        {
+            // Arrange
+            var descriptor = CreateVersion_2_0_Descriptor("/Pages/Home.cshtml", routeTemplate: null);
+
+            // Act
+            var result = CompiledPageRouteModelProvider.GetRouteTemplate(descriptor);
+
+            // Assert
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void GetRouteTemplate_ReturnsPathFromMetadataAttribute()
+        {
+            // Arrange
+            var expected = "test";
+            var descriptor = CreateVersion_2_1_Descriptor("/Pages/About.cshtml", metadata: new object[]
+            {
+                new RazorCompiledItemMetadataAttribute("RouteTemplate", expected),
+            });
+
+            // Act
+            var result = CompiledPageRouteModelProvider.GetRouteTemplate(descriptor);
+
+            // Assert
+            Assert.Equal(expected, result);
+        }
+
+        [Fact]
+        public void GetRouteTemplate_ReturnsNull_IfAttributeDoesNotExist()
+        {
+            // Arrange
+            var descriptor = CreateVersion_2_1_Descriptor("/Pages/About.cshtml");
+
+            // Act
+            var result = CompiledPageRouteModelProvider.GetRouteTemplate(descriptor);
+
+            // Assert
+            Assert.Null(result);
+        }
+
         private TestCompiledPageRouteModelProvider CreateProvider(
            RazorPagesOptions options = null,
            IList<CompiledViewDescriptor> descriptors = null,
@@ -522,15 +629,15 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
         {
             options = options ?? new RazorPagesOptions();
             fileProvider = fileProvider ?? new TestFileProvider();
-            var project = new FileProviderRazorProject(
+            var fileSystem = new FileProviderRazorProjectFileSystem(
                 Mock.Of<IRazorViewEngineFileProviderAccessor>(a => a.FileProvider == fileProvider),
                 Mock.Of<IHostingEnvironment>(e => e.ContentRootPath == "BasePath"));
-            var templateEngine = new RazorTemplateEngine(RazorEngine.Create(), project);
+            var projectEngine = RazorProjectEngine.Create(RazorConfiguration.Default, fileSystem);
 
             var provider = new TestCompiledPageRouteModelProvider(
                 new ApplicationPartManager(),
                 Options.Create(options),
-                templateEngine,
+                projectEngine,
                 NullLogger<CompiledPageRouteModelProvider>.Instance);
 
             provider.Descriptors.AddRange(descriptors ?? Array.Empty<CompiledViewDescriptor>());
@@ -542,6 +649,7 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
         {
             return new CompiledViewDescriptor
             {
+                IsPrecompiled = true,
                 RelativePath = path,
                 ViewAttribute = new RazorPageAttribute(path, typeof(object), routeTemplate),
             };
@@ -549,13 +657,12 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
 
         private static CompiledViewDescriptor CreateVersion_2_1_Descriptor(
             string path,
-            string routeTemplate = "",
             object[] metadata = null)
         {
             return new CompiledViewDescriptor
             {
+                IsPrecompiled = true,
                 RelativePath = path,
-                ViewAttribute = new RazorPageAttribute(path, typeof(object), routeTemplate),
                 Item = new TestRazorCompiledItem(typeof(object), "mvc.1.0.razor-page", path, metadata ?? Array.Empty<object>()),
             };
         }
@@ -565,15 +672,24 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
             public TestCompiledPageRouteModelProvider(
                 ApplicationPartManager partManager,
                 IOptions<RazorPagesOptions> options,
-                RazorTemplateEngine templateEngine,
+                RazorProjectEngine projectEngine,
                 ILogger<CompiledPageRouteModelProvider> logger)
-                : base(partManager, options, templateEngine, logger)
+                : base(partManager, options, projectEngine, logger)
             {
             }
 
             public List<CompiledViewDescriptor> Descriptors { get; } = new List<CompiledViewDescriptor>();
 
-            protected override IEnumerable<CompiledViewDescriptor> GetViewDescriptors(ApplicationPartManager applicationManager) => Descriptors;
+            protected override ViewsFeature GetViewFeature(ApplicationPartManager applicationManager)
+            {
+                var feature = new ViewsFeature();
+                foreach (var descriptor in Descriptors)
+                {
+                    feature.ViewDescriptors.Add(descriptor);
+                }
+
+                return feature;
+            }
         }
     }
 }

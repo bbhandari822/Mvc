@@ -5,6 +5,7 @@ using System;
 using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.ApplicationModels;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
@@ -219,7 +220,7 @@ namespace Microsoft.AspNetCore.Mvc.Internal
         }
 
         [Fact]
-        public void InferBindingSourceForParameter_ReturnsPath_IfParameterAppearsInAllRoutes()
+        public void InferBindingSourceForParameter_ReturnsPath_IfParameterAppearsInAnyRoutes_MulitpleRoutes()
         {
             // Arrange
             var actionName = nameof(ParameterBindingController.ParameterInMultipleRoutes);
@@ -234,7 +235,7 @@ namespace Microsoft.AspNetCore.Mvc.Internal
         }
 
         [Fact]
-        public void InferBindingSourceForParameter_DoesNotReturnPath_IfParameterDoesNotAppearInAllRoutes()
+        public void InferBindingSourceForParameter_ReturnsPath_IfParameterAppearsInAnyRoute()
         {
             // Arrange
             var actionName = nameof(ParameterBindingController.ParameterNotInAllRoutes);
@@ -245,7 +246,7 @@ namespace Microsoft.AspNetCore.Mvc.Internal
             var result = provider.InferBindingSourceForParameter(parameter);
 
             // Assert
-            Assert.Same(BindingSource.Query, result);
+            Assert.Same(BindingSource.Path, result);
         }
 
         [Fact]
@@ -309,7 +310,7 @@ namespace Microsoft.AspNetCore.Mvc.Internal
         }
 
         [Fact]
-        public void InferBindingSourceForParameter_DoesNotReturnPath_IfOneActionRouteOverridesControllerRoute()
+        public void InferBindingSourceForParameter_ReturnsPath_IfParameterPresentInNonOverriddenControllerRoute()
         {
             // Arrange
             var actionName = nameof(ParameterInController.MultipleRouteWithOverride);
@@ -320,7 +321,7 @@ namespace Microsoft.AspNetCore.Mvc.Internal
             var result = provider.InferBindingSourceForParameter(parameter);
 
             // Assert
-            Assert.Same(BindingSource.Query, result);
+            Assert.Same(BindingSource.Path, result);
         }
 
         [Fact]
@@ -384,6 +385,31 @@ namespace Microsoft.AspNetCore.Mvc.Internal
         }
 
         [Fact]
+        public void InferParameterBindingSources_SetsCorrectBindingSourceForComplexTypesWithCancellationToken()
+        {
+            // Arrange
+            var actionName = nameof(ParameterBindingController.ComplexTypeModelWithCancellationToken);
+
+            // Use the default set of ModelMetadataProviders so we get metadata details for CancellationToken. 
+            var modelMetadataProvider = TestModelMetadataProvider.CreateDefaultProvider();
+            var context = GetContext(typeof(ParameterBindingController), modelMetadataProvider);
+            var controllerModel = Assert.Single(context.Result.Controllers);
+            var actionModel = Assert.Single(controllerModel.Actions, m => m.ActionName == actionName);
+
+            var provider = GetProvider();
+
+            // Act
+            provider.InferParameterBindingSources(actionModel);
+
+            // Assert
+            var model = GetParameterModel<TestModel>(actionModel);
+            Assert.Same(BindingSource.Body, model.BindingInfo.BindingSource);
+
+            var cancellationToken = GetParameterModel<CancellationToken>(actionModel);
+            Assert.Same(BindingSource.Special, cancellationToken.BindingInfo.BindingSource);
+        }
+
+        [Fact]
         public void InferBindingSourceForParameter_ReturnsBodyForSimpleTypes()
         {
             // Arrange
@@ -396,6 +422,38 @@ namespace Microsoft.AspNetCore.Mvc.Internal
 
             // Assert
             Assert.Same(BindingSource.Query, result);
+        }
+
+        [Fact]
+        public void InferBoundPropertyModelPrefixes_SetsModelPrefix_ForComplexTypeFromValueProvider()
+        {
+            // Arrange
+            var controller = GetControllerModel(typeof(ControllerWithBoundProperty));
+
+            var provider = GetProvider();
+
+            // Act
+            provider.InferBoundPropertyModelPrefixes(controller);
+
+            // Assert
+            var property = Assert.Single(controller.ControllerProperties);
+            Assert.Equal(string.Empty, property.BindingInfo.BinderModelName);
+        }
+
+        [Fact]
+        public void InferParameterModelPrefixes_SetsModelPrefix_ForComplexTypeFromValueProvider()
+        {
+            // Arrange
+            var action = GetActionModel(typeof(ControllerWithBoundProperty), nameof(ControllerWithBoundProperty.SomeAction));
+
+            var provider = GetProvider();
+
+            // Act
+            provider.InferParameterModelPrefixes(action);
+
+            // Assert
+            var parameter = Assert.Single(action.Parameters);
+            Assert.Equal(string.Empty, parameter.BindingInfo.BinderModelName);
         }
 
         [Fact]
@@ -469,18 +527,30 @@ namespace Microsoft.AspNetCore.Mvc.Internal
             {
                 InvalidModelStateResponseFactory = _ => null,
             };
-            var optionsProvider = Options.Create(options);
-            modelMetadataProvider = modelMetadataProvider ?? new TestModelMetadataProvider();
-            var loggerFactory = NullLoggerFactory.Instance;
+            var optionsAccessor = Options.Create(options);
 
-            return new ApiBehaviorApplicationModelProvider(optionsProvider, modelMetadataProvider, loggerFactory);
+            var loggerFactory = NullLoggerFactory.Instance;
+            modelMetadataProvider = modelMetadataProvider ?? new EmptyModelMetadataProvider();
+            return new ApiBehaviorApplicationModelProvider(optionsAccessor, modelMetadataProvider, loggerFactory);
         }
 
-        private static ApplicationModelProviderContext GetContext(Type type)
+        private static ApplicationModelProviderContext GetContext(
+            Type type,
+            IModelMetadataProvider modelMetadataProvider = null)
         {
             var context = new ApplicationModelProviderContext(new[] { type.GetTypeInfo() });
-            new DefaultApplicationModelProvider(Options.Create(new MvcOptions())).OnProvidersExecuting(context);
+            var mvcOptions = Options.Create(new MvcOptions { AllowValidatingTopLevelNodes = true });
+            modelMetadataProvider = modelMetadataProvider ?? new EmptyModelMetadataProvider();
+            var provider = new DefaultApplicationModelProvider(mvcOptions, modelMetadataProvider);
+            provider.OnProvidersExecuting(context);
+
             return context;
+        }
+
+        private static ControllerModel GetControllerModel(Type controllerType)
+        {
+            var context = GetContext(controllerType);
+            return Assert.Single(context.Result.Controllers);
         }
 
         private static ActionModel GetActionModel(Type controllerType, string actionName)
@@ -494,6 +564,11 @@ namespace Microsoft.AspNetCore.Mvc.Internal
         {
             var action = GetActionModel(controllerType, actionName);
             return Assert.Single(action.Parameters);
+        }
+
+        private static ParameterModel GetParameterModel<T>(ActionModel action)
+        {
+            return Assert.Single(action.Parameters.Where(x => typeof(T).IsAssignableFrom(x.ParameterType)));
         }
 
         [ApiController]
@@ -573,6 +648,9 @@ namespace Microsoft.AspNetCore.Mvc.Internal
             [HttpPost]
             [Consumes("application/json")]
             public IActionResult ActionWithConsumesAttribute([FromForm] string parameter) => null;
+
+            [HttpPut("cancellation")]
+            public IActionResult ComplexTypeModelWithCancellationToken(TestModel model, CancellationToken cancellationToken) => null;
         }
 
         [ApiController]
@@ -621,6 +699,15 @@ namespace Microsoft.AspNetCore.Mvc.Internal
         {
             public override bool CanConvertFrom(ITypeDescriptorContext context, Type sourceType)
                 => sourceType == typeof(string);
+        }
+
+        [ApiController]
+        private class ControllerWithBoundProperty
+        {
+            [FromQuery]
+            public TestModel TestProperty { get; set; }
+
+            public IActionResult SomeAction([FromQuery] TestModel test) => null;
         }
     }
 }

@@ -68,7 +68,10 @@ namespace Microsoft.AspNetCore.Mvc.IntegrationTests
             return new ParameterBinder(
                 metadataProvider,
                 new ModelBinderFactory(metadataProvider, options, serviceProvider),
-                new CompositeModelValidatorProvider(GetModelValidatorProviders(options)),
+                new DefaultObjectValidator(
+                    metadataProvider,
+                    new[] { new CompositeModelValidatorProvider(GetModelValidatorProviders(options)) }),
+                options,
                 NullLoggerFactory.Instance);
         }
 
@@ -90,7 +93,10 @@ namespace Microsoft.AspNetCore.Mvc.IntegrationTests
             return new ParameterBinder(
                 metadataProvider,
                 new ModelBinderFactory(metadataProvider, options, services),
-                new CompositeModelValidatorProvider(GetModelValidatorProviders(options)),
+                new DefaultObjectValidator(
+                    metadataProvider,
+                    new[] { new CompositeModelValidatorProvider(GetModelValidatorProviders(options)) }),
+                options,
                 NullLoggerFactory.Instance);
         }
 
@@ -147,7 +153,9 @@ namespace Microsoft.AspNetCore.Mvc.IntegrationTests
             var serviceCollection = new ServiceCollection();
             serviceCollection.AddAuthorization();
             serviceCollection.AddSingleton(new ApplicationPartManager());
-            serviceCollection.AddMvc();
+            serviceCollection
+                .AddMvc()
+                .SetCompatibilityVersion(CompatibilityVersion.Version_2_1);
             serviceCollection
                 .AddSingleton<ObjectPoolProvider, DefaultObjectPoolProvider>()
                 .AddTransient<ILoggerFactory, LoggerFactory>()

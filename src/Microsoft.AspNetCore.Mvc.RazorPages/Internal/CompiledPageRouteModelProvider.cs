@@ -7,8 +7,10 @@ using System.Linq;
 using Microsoft.AspNetCore.Mvc.ApplicationModels;
 using Microsoft.AspNetCore.Mvc.ApplicationParts;
 using Microsoft.AspNetCore.Mvc.Razor.Compilation;
+using Microsoft.AspNetCore.Mvc.Razor.Extensions;
 using Microsoft.AspNetCore.Mvc.Razor.Internal;
 using Microsoft.AspNetCore.Mvc.RazorPages.Infrastructure;
+using Microsoft.AspNetCore.Razor.Hosting;
 using Microsoft.AspNetCore.Razor.Language;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -19,20 +21,20 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
     {
         private readonly ApplicationPartManager _applicationManager;
         private readonly RazorPagesOptions _pagesOptions;
-        private readonly RazorTemplateEngine _templateEngine;
+        private readonly RazorProjectEngine _razorProjectEngine;
         private readonly ILogger<CompiledPageRouteModelProvider> _logger;
         private readonly PageRouteModelFactory _routeModelFactory;
 
         public CompiledPageRouteModelProvider(
             ApplicationPartManager applicationManager,
             IOptions<RazorPagesOptions> pagesOptionsAccessor,
-            RazorTemplateEngine templateEngine,
+            RazorProjectEngine razorProjectEngine,
             ILogger<CompiledPageRouteModelProvider> logger)
         {
             _applicationManager = applicationManager ?? throw new ArgumentNullException(nameof(applicationManager));
             _pagesOptions = pagesOptionsAccessor?.Value ?? throw new ArgumentNullException(nameof(pagesOptionsAccessor));
-            _templateEngine = templateEngine ?? throw new ArgumentNullException(nameof(templateEngine));
-            _logger = logger ?? throw new ArgumentNullException(nameof(templateEngine));
+            _razorProjectEngine = razorProjectEngine ?? throw new ArgumentNullException(nameof(razorProjectEngine));
+            _logger = logger ?? throw new ArgumentNullException(nameof(razorProjectEngine));
             _routeModelFactory = new PageRouteModelFactory(_pagesOptions, _logger);
         }
 
@@ -56,22 +58,55 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
             }
         }
 
-        /// <summary>
-        /// Gets the sequence of <see cref="CompiledViewDescriptor"/> from <paramref name="applicationManager"/>.
-        /// </summary>
-        /// <param name="applicationManager">The <see cref="ApplicationPartManager"/>s</param>
-        /// <returns>The sequence of <see cref="CompiledViewDescriptor"/>.</returns>
-        protected virtual IEnumerable<CompiledViewDescriptor> GetViewDescriptors(ApplicationPartManager applicationManager)
+        private IEnumerable<CompiledViewDescriptor> GetViewDescriptors(ApplicationPartManager applicationManager)
         {
             if (applicationManager == null)
             {
                 throw new ArgumentNullException(nameof(applicationManager));
             }
 
+            var viewsFeature = GetViewFeature(applicationManager);
+
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var viewDescriptor in viewsFeature.ViewDescriptors)
+            {
+                if (!visited.Add(viewDescriptor.RelativePath))
+                {
+                    // Already seen an descriptor with a higher "order"
+                    continue;
+                }
+
+                if (!viewDescriptor.IsPrecompiled)
+                {
+                    continue;
+                }
+
+                if (IsRazorPage(viewDescriptor))
+                {
+                    yield return viewDescriptor;
+                }
+            }
+
+            bool IsRazorPage(CompiledViewDescriptor viewDescriptor)
+            {
+                if (viewDescriptor.Item != null)
+                {
+                    return viewDescriptor.Item.Kind == RazorPageDocumentClassifierPass.RazorPageDocumentKind;
+                }
+                else if (viewDescriptor.ViewAttribute != null)
+                {
+                    return viewDescriptor.ViewAttribute is RazorPageAttribute;
+                }
+
+                return false;
+            }
+        }
+
+        protected virtual ViewsFeature GetViewFeature(ApplicationPartManager applicationManager)
+        {
             var viewsFeature = new ViewsFeature();
             applicationManager.PopulateFeature(viewsFeature);
-
-            return viewsFeature.ViewDescriptors.Where(d => d.IsPrecompiled && d.ViewAttribute is RazorPageAttribute);
+            return viewsFeature;
         }
 
         private void CreateModels(PageRouteModelProviderContext context)
@@ -90,24 +125,25 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
 
             foreach (var viewDescriptor in GetViewDescriptors(_applicationManager))
             {
-                if (viewDescriptor.Item != null && !ChecksumValidator.IsItemValid(_templateEngine.Project, viewDescriptor.Item))
+                if (viewDescriptor.Item != null && !ChecksumValidator.IsItemValid(_razorProjectEngine.FileSystem, viewDescriptor.Item))
                 {
                     // If we get here, this compiled Page has different local content, so ignore it.
                     continue;
                 }
 
-                var pageAttribute = (RazorPageAttribute)viewDescriptor.ViewAttribute;
+                var relativePath = viewDescriptor.RelativePath;
+                var routeTemplate = GetRouteTemplate(viewDescriptor);
                 PageRouteModel routeModel = null;
 
                 // When RootDirectory and AreaRootDirectory overlap (e.g. RootDirectory = '/', AreaRootDirectory = '/Areas'), we
                 // only want to allow a page to be associated with the area route.
-                if (_pagesOptions.AllowAreas && viewDescriptor.RelativePath.StartsWith(areaRootDirectory, StringComparison.OrdinalIgnoreCase))
+                if (_pagesOptions.AllowAreas && relativePath.StartsWith(areaRootDirectory, StringComparison.OrdinalIgnoreCase))
                 {
-                    routeModel = _routeModelFactory.CreateAreaRouteModel(viewDescriptor.RelativePath, pageAttribute.RouteTemplate);
+                    routeModel = _routeModelFactory.CreateAreaRouteModel(relativePath, routeTemplate);
                 }
-                else if (viewDescriptor.RelativePath.StartsWith(rootDirectory, StringComparison.OrdinalIgnoreCase))
+                else if (relativePath.StartsWith(rootDirectory, StringComparison.OrdinalIgnoreCase))
                 {
-                    routeModel = _routeModelFactory.CreateRouteModel(pageAttribute.Path, pageAttribute.RouteTemplate);
+                    routeModel = _routeModelFactory.CreateRouteModel(relativePath, routeTemplate);
                 }
 
                 if (routeModel != null)
@@ -115,6 +151,24 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
                     context.RouteModels.Add(routeModel);
                 }
             }
+        }
+
+        internal static string GetRouteTemplate(CompiledViewDescriptor viewDescriptor)
+        {
+            if (viewDescriptor.ViewAttribute != null)
+            {
+                return ((RazorPageAttribute)viewDescriptor.ViewAttribute).RouteTemplate;
+            }
+
+            if (viewDescriptor.Item != null)
+            {
+                return viewDescriptor.Item.Metadata
+                    .OfType<RazorCompiledItemMetadataAttribute>()
+                    .FirstOrDefault(f => f.Key == RazorPageDocumentClassifierPass.RouteTemplateKey)
+                    ?.Value;
+            }
+
+            return null;
         }
     }
 }

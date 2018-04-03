@@ -26,7 +26,7 @@ namespace Microsoft.AspNetCore.Mvc.FunctionalTests
 
         public BasicTests(MvcTestFixture<BasicWebSite.Startup> fixture)
         {
-            Client = fixture.Client;
+            Client = fixture.CreateDefaultClient();
         }
 
         public HttpClient Client { get; }
@@ -474,24 +474,6 @@ namespace Microsoft.AspNetCore.Mvc.FunctionalTests
         }
 
         [Fact]
-        public async Task AlwaysRunResultFilters_CanRunWhenResourceFiltersShortCircuit()
-        {
-            // Arrange
-            var url = "Filters/AlwaysRunResultFiltersCanRunWhenResourceFilterShortCircuit";
-            var request = new HttpRequestMessage(HttpMethod.Post, url)
-            {
-                Content = new StringContent("Test", Encoding.UTF8, "application/json"),
-            };
-            
-            // Act
-            var response = await Client.SendAsync(request);
-
-            // Assert
-            Assert.Equal(422, (int)response.StatusCode);
-            Assert.Equal("Can't process this!", await response.Content.ReadAsStringAsync());
-        }
-
-        [Fact]
         public async Task ApplicationAssemblyPartIsListedAsFirstAssembly()
         {
             // Act
@@ -506,6 +488,37 @@ namespace Microsoft.AspNetCore.Mvc.FunctionalTests
 
             // Assert
             Assert.Equal(expected, assemblyParts);
+        }
+
+        [Fact]
+        public async Task ViewDataProperties_AreTransferredToViews()
+        {
+            // Act
+            var document = await Client.GetHtmlDocumentAsync("ViewDataProperty/ViewDataPropertyToView");
+
+            // Assert
+            var message = document.QuerySelector("#message").TextContent;
+            Assert.Equal("Message set in action", message);
+
+            var filterMessage = document.QuerySelector("#filter-message").TextContent;
+            Assert.Equal("Value set in OnActionExecuting", filterMessage);
+
+            var title = document.QuerySelector("title").TextContent;
+            Assert.Equal("View Data Property Sample", title);
+        }
+
+        [Fact]
+        public async Task ViewDataProperties_AreTransferredToViewComponents()
+        {
+            // Act
+            var document = await Client.GetHtmlDocumentAsync("ViewDataProperty/ViewDataPropertyToViewComponent");
+
+            // Assert
+            var message = document.QuerySelector("#message").TextContent;
+            Assert.Equal("Message set in action", message);
+
+            var title = document.QuerySelector("title").TextContent;
+            Assert.Equal("View Data Property Sample", title);
         }
     }
 }

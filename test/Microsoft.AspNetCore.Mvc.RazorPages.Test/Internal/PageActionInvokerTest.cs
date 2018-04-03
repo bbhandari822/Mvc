@@ -26,6 +26,7 @@ using Microsoft.AspNetCore.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Moq;
 using Xunit;
 
@@ -1216,6 +1217,7 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
                 selector.Object,
                 diagnosticListener ?? new DiagnosticListener("Microsoft.AspNetCore"),
                 logger ?? NullLogger.Instance,
+                new ActionResultTypeMapper(),
                 pageContext,
                 filters ?? Array.Empty<IFilterMetadata>(),
                 cacheEntry,
@@ -1239,10 +1241,17 @@ namespace Microsoft.AspNetCore.Mvc.RazorPages.Internal
                 factory = TestModelBinderFactory.CreateDefault();
             }
 
+            var metadataProvider = TestModelMetadataProvider.CreateDefaultProvider();
+            var mvcOptions = new MvcOptions
+            {
+                AllowValidatingTopLevelNodes = true,
+            };
+
             return new ParameterBinder(
-                TestModelMetadataProvider.CreateDefaultProvider(),
+                metadataProvider,
                 factory,
-                validator,
+                new DefaultObjectValidator(metadataProvider, new[] { validator }),
+                Options.Create(mvcOptions),
                 NullLoggerFactory.Instance);
         }
 

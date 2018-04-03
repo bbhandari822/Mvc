@@ -64,6 +64,11 @@ namespace Microsoft.AspNetCore.Mvc.Internal
                     controllerModel.ApiExplorer.IsVisible = true;
                 }
 
+                if (isApiController)
+                {
+                    InferBoundPropertyModelPrefixes(controllerModel);
+                }
+
                 var controllerHasSelectorModel = controllerModel.Selectors.Any(s => s.AttributeRouteModel != null);
 
                 foreach (var actionModel in controllerModel.Actions)
@@ -78,6 +83,8 @@ namespace Microsoft.AspNetCore.Mvc.Internal
                     AddInvalidModelStateFilter(actionModel);
 
                     InferParameterBindingSources(actionModel);
+
+                    InferParameterModelPrefixes(actionModel);
 
                     AddMultipartFormDataConsumesAttribute(actionModel);
                 }
@@ -132,7 +139,8 @@ namespace Microsoft.AspNetCore.Mvc.Internal
             actionModel.Filters.Add(_modelStateInvalidFilter);
         }
 
-        private void InferParameterBindingSources(ActionModel actionModel)
+        // Internal for unit testing
+        internal void InferParameterBindingSources(ActionModel actionModel)
         {
             if (_modelMetadataProvider == null || _apiBehaviorOptions.SuppressInferBindingSourcesForParameters)
             {
@@ -179,42 +187,64 @@ namespace Microsoft.AspNetCore.Mvc.Internal
             }
         }
 
+        // For any complex types that are bound from value providers, set the prefix
+        // to the empty prefix by default. This makes binding much more predictable
+        // and describable via ApiExplorer
+
+        // internal for testing
+        internal void InferBoundPropertyModelPrefixes(ControllerModel controllerModel)
+        {
+            foreach (var property in controllerModel.ControllerProperties)
+            {
+                if (property.BindingInfo != null &&
+                    property.BindingInfo.BinderModelName == null &&
+                    property.BindingInfo.BindingSource != null &&
+                    !property.BindingInfo.BindingSource.IsGreedy)
+                {
+                    var metadata = _modelMetadataProvider.GetMetadataForProperty(
+                        controllerModel.ControllerType,
+                        property.PropertyInfo.Name);
+                    if (metadata.IsComplexType)
+                    {
+                        property.BindingInfo.BinderModelName = string.Empty;
+                    }
+                }
+            }
+        }
+
+        // internal for testing
+        internal void InferParameterModelPrefixes(ActionModel actionModel)
+        {
+            foreach (var parameter in actionModel.Parameters)
+            {
+                var bindingInfo = parameter.BindingInfo;
+                if (bindingInfo?.BindingSource != null &&
+                    bindingInfo.BinderModelName == null &&
+                    !bindingInfo.BindingSource.IsGreedy &&
+                    IsComplexTypeParameter(parameter))
+                {
+                    parameter.BindingInfo.BinderModelName = string.Empty;
+                }
+            }
+        }
+
         // Internal for unit testing.
         internal BindingSource InferBindingSourceForParameter(ParameterModel parameter)
         {
-            var parameterType = parameter.ParameterInfo.ParameterType;
-            if (ParameterExistsInAllRoutes(parameter.Action, parameter.ParameterName))
+            if (ParameterExistsInAnyRoute(parameter.Action, parameter.ParameterName))
             {
                 return BindingSource.Path;
             }
-            else
-            {
-                ModelMetadata parameterMetadata;
-                if (_modelMetadataProvider is ModelMetadataProvider modelMetadataProvider)
-                {
-                    parameterMetadata = modelMetadataProvider.GetMetadataForParameter(parameter.ParameterInfo);
-                }
-                else
-                {
-                    parameterMetadata = _modelMetadataProvider.GetMetadataForType(parameter.ParameterInfo.ParameterType);
-                }
 
-                if (parameterMetadata != null)
-                {
-                    var bindingSource = parameterMetadata.IsComplexType ?
-                        BindingSource.Body :
-                        BindingSource.Query;
+            var bindingSource = IsComplexTypeParameter(parameter) ?
+                BindingSource.Body :
+                BindingSource.Query;
 
-                    return bindingSource;
-                }
-            }
-
-            return null;
+            return bindingSource;
         }
 
-        private bool ParameterExistsInAllRoutes(ActionModel actionModel, string parameterName)
+        private bool ParameterExistsInAnyRoute(ActionModel actionModel, string parameterName)
         {
-            var parameterExistsInSomeRoute = false;
             foreach (var (route, _, _) in ActionAttributeRouteModel.GetAttributeRoutes(actionModel))
             {
                 if (route == null)
@@ -223,16 +253,21 @@ namespace Microsoft.AspNetCore.Mvc.Internal
                 }
 
                 var parsedTemplate = TemplateParser.Parse(route.Template);
-                if (parsedTemplate.GetParameter(parameterName) == null)
+                if (parsedTemplate.GetParameter(parameterName) != null)
                 {
-                    return false;
+                    return true;
                 }
-
-                // Ensure at least one route exists.
-                parameterExistsInSomeRoute = true;
             }
 
-            return parameterExistsInSomeRoute;
+            return false;
+        }
+
+        private bool IsComplexTypeParameter(ParameterModel parameter)
+        {
+            // No need for information from attributes on the parameter. Just use its type.
+            return _modelMetadataProvider
+                .GetMetadataForType(parameter.ParameterInfo.ParameterType)
+                .IsComplexType;
         }
     }
 }

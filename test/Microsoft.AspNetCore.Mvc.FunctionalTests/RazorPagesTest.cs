@@ -3,12 +3,15 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Testing;
 using Xunit;
 
 namespace Microsoft.AspNetCore.Mvc.FunctionalTests
@@ -19,8 +22,12 @@ namespace Microsoft.AspNetCore.Mvc.FunctionalTests
 
         public RazorPagesTest(MvcTestFixture<RazorPagesWebSite.Startup> fixture)
         {
-            Client = fixture.Client;
+            var factory = fixture.Factories.FirstOrDefault() ?? fixture.WithWebHostBuilder(ConfigureWebHostBuilder);
+            Client = factory.CreateDefaultClient();
         }
+
+        private static void ConfigureWebHostBuilder(IWebHostBuilder builder) =>
+            builder.UseStartup<RazorPagesWebSite.Startup>();
 
         public HttpClient Client { get; }
 
@@ -380,11 +387,14 @@ namespace Microsoft.AspNetCore.Mvc.FunctionalTests
             Assert.StartsWith("Hello, You posted!", content.Trim());
         }
 
-        [Fact]
-        public async Task HelloWorldWithPageModelHandler_CanGetContent()
+        [Theory]
+        [InlineData("GET")]
+        [InlineData("HEAD")]
+        public async Task HelloWorldWithPageModelHandler_CanGetContent(string httpMethod)
         {
             // Arrange
-            var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/HelloWorldWithPageModelHandler?message=pagemodel");
+            var url = "http://localhost/HelloWorldWithPageModelHandler?message=pagemodel";
+            var request = new HttpRequestMessage(new HttpMethod(httpMethod), url);
 
             // Act
             var response = await Client.SendAsync(request);
@@ -835,7 +845,6 @@ Microsoft.AspNetCore.Mvc.ViewFeatures.ViewDataDictionary`1[AspNetCore.InjectedPa
             Assert.Equal(expected, response.Headers.Location.ToString());
         }
 
-
         [Fact]
         public async Task RedirectToSelfWorks()
         {
@@ -1241,6 +1250,23 @@ Microsoft.AspNetCore.Mvc.ViewFeatures.ViewDataDictionary`1[AspNetCore.InjectedPa
 
             // Assert
             Assert.Equal("<p>Hey, it's Mr. totally custom here!</p>", content.Trim());
+        }
+
+        [Fact]
+        public async Task Page_Handler_BindsToDefaultValues()
+        {
+            // Arrange
+            string expected;
+            using (new CultureReplacer(CultureInfo.InvariantCulture, CultureInfo.InvariantCulture))
+            {
+                expected = $"id: 10, guid: {default(Guid)}, boolean: {default(bool)}, dateTime: {default(DateTime)}";
+            }
+
+            // Act
+            var content = await Client.GetStringAsync("http://localhost/ModelHandlerTestPage/DefaultValues");
+
+            // Assert
+            Assert.Equal(expected, content);
         }
 
         private async Task AddAntiforgeryHeaders(HttpRequestMessage request)
